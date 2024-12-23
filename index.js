@@ -8,7 +8,7 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 // middleware
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://survey-app-f0656.web.app"],
+    origin: ["http://localhost:5173"],
     credentials: true,
   })
 );
@@ -36,11 +36,8 @@ async function run() {
     //await client.connect();
 
     const userCollection = client.db("surveyDB").collection("users");
-    const surveyCollection = client.db("surveyDB").collection("surveys");
-    const voteCollection = client.db("surveyDB").collection("votes");
-    const paymentCollection = client.db("surveyDB").collection("payments");
-    const reportCollection = client.db("surveyDB").collection("reports");
-    const commentCollection = client.db("surveyDB").collection("comments");
+    const taskCollection = client.db("surveyDB").collection("tasks");
+    const taskActivityCollection = client.db("surveyDB").collection("taskActivity");
     // jwt related api
     app.post("/jwt", async (req, res) => {
       const user = req.body;
@@ -78,27 +75,6 @@ async function run() {
       next();
     };
 
-    const verifySurveyor = async (req, res, next) => {
-      const email = req.decoded.email;
-      const query = { email: email };
-      const user = await userCollection.findOne(query);
-      const isSurveyor = user?.role === "surveyor";
-      if (!isSurveyor) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
-      next();
-    };
-
-    const verifyProUser = async (req, res, next) => {
-      const email = req.decoded.email;
-      const query = { email: email };
-      const user = await userCollection.findOne(query);
-      const isProUser = user?.role === "pro-user";
-      if (!isProUser) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
-      next();
-    };
 
     // users related api
     app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
@@ -165,7 +141,7 @@ async function run() {
       }
 
       // Add default role "user"
-      user.role = "user";
+     // user.role = "user";
 
       const result = await userCollection.insertOne(user);
       res.send(result);
@@ -202,70 +178,10 @@ async function run() {
       res.send(result);
     });
 
-    // payment intent
-    app.post("/create-payment-intent", async (req, res) => {
-      const { price } = req.body;
-      const amount = parseInt(price * 100);
-      console.log(amount, "amount inside the intent");
 
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: amount,
-        currency: "usd",
-        payment_method_types: ["card"],
-      });
 
-      res.send({
-        clientSecret: paymentIntent.client_secret,
-      });
-    });
-
-    app.get("/payments/:email", verifyToken, verifyAdmin, async (req, res) => {
-      console.log(req.decoded.email);
-      const query = { email: req.params.email };
-      if (req.params.email !== req.decoded.email) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
-      const result = await paymentCollection.find().toArray();
-      res.send(result);
-    });
-    app.post("/payments", async (req, res) => {
-      const payment = req.body;
-      const paymentResult = await paymentCollection.insertOne(payment);
-
-      //  console.log("payment info", payment);
-
-      res.send({ paymentResult });
-    });
-
-    // backend/server.js
-    app.get("/surveys", async (req, res) => {
-      const { category, sort } = req.query;
-      let filter = {};
-      let sortOption = {};
-
-      if (category) {
-        filter.category = category;
-      }
-
-      if (sort === "votes") {
-        sortOption.voteCount = -1; // Sort by vote count in descending order
-      }
-
-      try {
-        const surveys = await surveyCollection
-          .find(filter)
-          .sort(sortOption)
-          .toArray();
-        res.status(200).send(surveys);
-      } catch (error) {
-        console.error("Error fetching surveys", error);
-        res
-          .status(500)
-          .send({ message: "Internal Server Error", error: error.message });
-      }
-    });
     // Route to get a survey by ID
-    app.get("/surveys/:id", async (req, res) => {
+    app.get("/tasks/:id", async (req, res) => {
       const id = req.params.id;
 
       try {
@@ -275,7 +191,7 @@ async function run() {
         }
 
         const query = { _id: new ObjectId(id) };
-        const result = await surveyCollection.findOne(query);
+        const result = await taskCollection.findOne(query);
 
         if (!result) {
           return res.status(404).send("Survey not found");
@@ -288,16 +204,48 @@ async function run() {
       }
     });
 
-    app.put("/surveys/:surveyId",verifyToken,verifySurveyor, async (req, res) => {
+
+    app.post("/tasks/activities/:id", async (req, res) => {
+      const taskId = req.params.id;
+      const { activity } = req.body;
+      const timestamp = new Date();
+    
       try {
-        const surveyId = req.params.surveyId;
+        // Create the activity object with task_id and activity details
+        const newActivity = {
+          task_id: taskId, // Adding the task_id to the activity
+          name: activity,
+          createdAt: timestamp
+        };
+    
+        // Push the new activity to the task's activities array
+        const result = await taskActivityCollection.insertOne(newActivity)
+    
+        // If no task is found or updated
+   
+        // Return success response with the added activity
+        res.status(200).json({ message: "Activity added successfully" });
+      } catch (error) {
+        console.error("Error adding activity:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
 
-        // Verify token owner
-        // if (email !== req.user.email) {
-        //   return res.status(403).send({ message: "Forbidden access" });
-        // }
+    app.get("/tasks/:taskId/activities", async (req, res) => {
+      const task_id = req.params.taskId;
+       console.log(task_id);
+      const query = { task_id: new ObjectId(task_id) };
+        const activities = await taskActivityCollection.find({}).toArray();         // Convert the cursor to an array
+    
+  
+        res.json(activities);
+  
+    });
 
-        const filter = { _id: new ObjectId(surveyId) };
+    app.put("/tasks/:taskId", async (req, res) => {
+      try {
+        const taskId = req.params.taskId;
+        const filter = { _id: new ObjectId(taskId) };
         const options = { upsert: true };
         const updatedSurveyCollection = req.body;
 
@@ -305,13 +253,13 @@ async function run() {
           $set: {
             title: updatedSurveyCollection.title,
             description: updatedSurveyCollection.description,
-            category: updatedSurveyCollection.category,
-            options: updatedSurveyCollection.options,
-            deadline: updatedSurveyCollection.deadline,
+            priority: updatedSurveyCollection.priority,
+            status: updatedSurveyCollection.status,
+            dueDate: updatedSurveyCollection.dueDate,
           },
         };
 
-        const result = await surveyCollection.updateOne(
+        const result = await taskCollection.updateOne(
           filter,
           survey,
           options
@@ -325,364 +273,85 @@ async function run() {
       }
     });
 
-    // Report a survey
-    app.post("/report/:surveyID", async (req, res) => {
-      const { userEmail, title, category, description, reason } = req.body;
-      const surveyId = req.params.surveyID;
 
-      // Check if the report already exists for the user and survey
-      const query = { surveyId, userEmail };
-      const existingReport = await reportCollection.findOne(query);
-
-      if (existingReport) {
-        return res.status(200).json({ message: "You have already Reported" });
-      }
-
-      const newReport = {
-        surveyId,
-        userEmail,
-        title,
-        category,
-        description,
-        reason,
-      };
-      const result = await reportCollection.insertOne(newReport);
-      res.send(result);
-    });
-
-    // Fetch all reports by user email
-    app.get("/user/reports/:userEmail", async (req, res) => {
-      const { userEmail } = req.params;
-
+    app.put("/tasks/activities/:id", async (req, res) => {
       try {
-        // Find all reports by the user using userEmail
-        const reports = await reportCollection.find({ userEmail }).toArray();
-
-        res.status(200).json(reports);
-      } catch (error) {
-        res.status(500).json({ message: "Error fetching reports", error });
-      }
-    });
-
-    // Comment a survey
-    app.post("/comment/:surveyID", async (req, res) => {
-      const {
-        userEmail,
-        title,
-        category,
-        description,
-        text,
-        userProfilePicture,
-        userName,
-      } = req.body;
-      const surveyId = req.params.surveyID;
-
-      try {
-        // Ensure surveyId is a valid ObjectId
-        if (!ObjectId.isValid(surveyId)) {
-          return res.status(400).json({ message: "Invalid survey ID" });
-        }
-
-        // Construct the new comment object
-        const newComment = {
-          surveyId: new ObjectId(surveyId),
-          userEmail,
-          title,
-          category,
-          description,
-          text,
-          userName,
-          userProfilePicture,
-          createdAt: new Date(), // Optionally add a timestamp
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const options = { upsert: true };
+        const updatedTaskActivityCollection = req.body;
+        const activity = {
+          $set: {
+            name: updatedTaskActivityCollection.activity,
+         
+          },
         };
 
-        // Insert the new comment into the database
-        const result = await commentCollection.insertOne(newComment);
-
-        // Send the result of the insert operation
-        res.status(201).json(result);
-      } catch (error) {
-        // Handle any errors that occur during the operation
-        res.status(500).json({ message: "Error adding comment", error });
-      }
-    });
-    app.get("/comments/:surveyID", async (req, res) => {
-      const surveyId = req.params.surveyID;
-      const query = { surveyId: new ObjectId(surveyId) };
-      const comments = await commentCollection.find(query).toArray();
-      res.send(comments);
-    });
-    // Fetch all comments by user email
-    app.get("/user/comments/:userEmail",verifyToken,verifyProUser, async (req, res) => {
-      const { userEmail } = req.params;
-      if (req.params.userEmail !== req.decoded.email) {
-        return res.status(403).send({ message: 'forbidden access' });
-      }
-      try {
-        // Find all comments by the user using userEmail
-        const comments = await commentCollection.find({ userEmail }).toArray();
-        if (comments.length === 0) {
-          return res
-            .status(404)
-            .json({ message: "No comments found for this user" });
-        }
-        res.status(200).json(comments);
-      } catch (error) {
-        res.status(500).json({ message: "Error fetching comments", error });
-      }
-    });
-
-    app.get("/vote/:surveyId", async (req, res) => {
-      const { surveyId } = req.params;
-
-      const query = { surveyId: surveyId };
-
-      const votes = await voteCollection.find(query).toArray();
-
-      if (votes.length === 0) {
-        return res.status(404).send("No votes found for this survey");
-      }
-
-      res.json(votes);
-    });
-
-    // Fetch all surveys a user has participated in using userEmail
-    app.get(
-      "/user/:userEmail/participated-surveys",
-
-      async (req, res) => {
-        const { userEmail } = req.params;
-
-        try {
-          // Find all votes cast by the user using userEmail
-          const votes = await voteCollection.find({ userEmail }).toArray();
-          if (votes.length === 0) {
-            return res
-              .status(404)
-              .json({ message: "No surveys found for this user" });
-          }
-
-          // Extract unique survey IDs
-          const surveyIds = [...new Set(votes.map((vote) => vote.surveyId))];
-
-          // Find surveys by IDs
-          const surveys = await surveyCollection
-            .find({ _id: { $in: surveyIds.map((id) => new ObjectId(id)) } })
-            .toArray();
-
-          res.status(200).json(surveys);
-        } catch (error) {
-          res.status(500).json({ message: "Error fetching surveys", error });
-        }
-      }
-    );
-
-    // Route to get surveys by user email
-    app.get("/surveyor/surveys/:email",verifyToken,verifySurveyor, async (req, res) => {
-      const email = req.params.email;
-      const query = { userEmail: email };
-      const result = await surveyCollection.find(query).toArray();
-      res.send(result);
-    });
-
-    // Feedback endpoint
-    app.post("/surveys/feedback/:id",verifyToken,verifyAdmin, async (req, res) => {
-      const id = req.params.id;
-      const { feedback } = req.body;
-      const survey = await surveyCollection.findOne({ _id: new ObjectId(id) });
-      if (!survey) {
-        return res.status(404).json({ message: "Survey not found" });
-      }
-
-      const result = await surveyCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status: "unpublish", feedback } }
-      );
-
-      if (result.modifiedCount === 1) {
-        res
-          .status(200)
-          .json({ message: "Feedback submitted successfully", survey });
-      } else {
-        res.status(400).json({ message: "Failed to update survey" });
-      }
-    });
-    // Endpoint to get feedback for all surveys
-    app.get(
-      "/api/surveys/feedbacks",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const feedbacks = await surveyCollection
-            .find({ feedback: { $exists: true, $ne: "" } })
-            .project({ title: 1, feedback: 1, status: 1 })
-            .toArray();
-          res.status(200).json(feedbacks);
-        } catch (err) {
-          res.status(500).json({ message: "Server error", error: err.message });
-        }
-      }
-    );
-
-    // API to get vote counts for a survey
-    app.get("/surveys/:id/results", async (req, res) => {
-      try {
-        const voteCountsPipeline = [
-          {
-            $match: {
-              surveyId: new ObjectId(req.params.id),
-            },
-          },
-          {
-            $unwind: "$responses",
-          },
-          {
-            $group: {
-              _id: {
-                question: "$responses.question",
-                option: "$responses.option",
-              },
-              voteCount: { $sum: 1 },
-            },
-          },
-          {
-            $group: {
-              _id: "$_id.question",
-              options: {
-                $push: {
-                  option: "$_id.option",
-                  voteCount: "$voteCount",
-                },
-              },
-            },
-          },
-          {
-            $project: {
-              _id: 0,
-              question: "$_id",
-              options: 1,
-            },
-          },
-        ];
-
-        const voteCounts = voteCollection
-          .aggregate(voteCountsPipeline)
-          .toArray();
-        res.json(voteCounts);
-      } catch (err) {
-        res.status(500).json({ message: err.message });
-      }
-    });
-
-    app.post("/surveys/:surveyId/vote",verifyToken, async (req, res) => {
-      const surveyId = req.params.surveyId;
-      const { userEmail, userName, responses } = req.body;
-
-      const query = { surveyId, userEmail };
-      const existingVote = await voteCollection.findOne(query);
-
-      if (existingVote) {
-        return res.status(200).json({ message: "You have already Voted" });
-      }
-
-      if (
-        !surveyId ||
-        !responses ||
-        !Array.isArray(responses) ||
-        responses.length !== 1
-      ) {
-        return res.status(400).json({ error: "Invalid request format" });
-      }
-
-      const { option } = responses[0];
-      if (option !== 0 && option !== 1) {
-        return res.status(400).json({ error: "Invalid option value" });
-      }
-
-      const newVote = {
-        surveyId: surveyId,
-        userEmail: userEmail,
-        userName: userName,
-        responses: responses,
-      };
-
-      try {
-        await voteCollection.insertOne(newVote);
-
-        // Increment the vote count in the survey collection
-        let updateObj = { $inc: { voteCount: 1 } };
-        if (option === 0) {
-          updateObj.$inc.yesCount = 1;
-        } else {
-          updateObj.$inc.noCount = 1;
-        }
-
-        await surveyCollection.updateOne(
-          { _id: new ObjectId(surveyId) },
-          updateObj
+        const result = await taskActivityCollection.updateOne(
+          filter,
+          activity,
+          options
         );
-
-        res.status(201).send({ message: "Vote submitted successfully" });
+        res.send(result);
       } catch (error) {
+        console.error("Error updating Survey:", error);
         res
           .status(500)
-          .send({ message: "Error submitting vote", error: error.message });
+          .json({ error: "An error occurred while updating Survey" });
       }
     });
 
-    app.get("/surveys/:surveyId/voteCounts", async (req, res) => {
-      const { surveyId } = req.params;
+   
+    // Route to get surveys by user email
+    app.get("/tasks/:email", async (req, res) => {
 
+      const { email } = req.params;
+      if (!email) {
+        return res.status(400).send({ error: "Email is required" });
+      }
       try {
-        const surveyObjectId = surveyId;
-        console.log(surveyObjectId);
-        const votesCount = await voteCollection
-          .aggregate([
-            {
-              $match: { surveyId: surveyId },
-            },
-            {
-              $unwind: "$responses",
-            },
-            {
-              $group: {
-                _id: "$responses.option",
-                count: { $sum: 1 },
-              },
-            },
-            {
-              $project: {
-                _id: 0,
-                option: "$_id",
-                count: 1,
-              },
-            },
-          ])
-          .toArray();
-
-        res.status(200).send(votesCount);
+        const result = await taskCollection.find({ userEmail: email }).toArray();
+        res.send(result);
       } catch (error) {
-        console.error("Error fetching vote counts", error);
-        res.status(500).json({ message: "Internal Server Error" });
+        res.status(500).send({ error: "Failed to fetch tasks" });
       }
     });
 
-    app.get("/surveys/:surveyId/votes", async (req, res) => {
-      const surveyId = req.params.surveyId;
-      const votes = await voteCollection.find({ surveyId: surveyId }).toArray();
-      res.send(votes);
+    app.get("/tasks", async (req, res) => {
+      try {
+        const result = await taskCollection.find().toArray(); // Fetch all tasks without filtering
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching tasks:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
     });
 
-    app.post("/surveys",verifyToken,verifySurveyor, async (req, res) => {
+    app.delete('/tasks/:id', async (req, res) => {
+     
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await taskCollection.deleteOne(query);
+        res.send(result);
+    });
+    app.delete('/tasks/activities/:activityId', async (req, res) => {
+     
+      const activityId = req.params.activityId;
+      const query = { _id: new ObjectId(activityId) };
+      const result = await taskActivityCollection.deleteOne(query);
+      res.send(result);
+  });
+  
+
+
+
+    app.post("/tasks",verifyToken, async (req, res) => {
       try {
         const surveyData = {
           ...req.body,
-          status: "publish",
-          voteCount:0,
           timestamp: new Date(),
         };
-        const result = await surveyCollection.insertOne(surveyData);
+        const result = await taskCollection.insertOne(surveyData);
         res.send(result);
       } catch (error) {
         console.error("Error inserting survey", error);
@@ -690,53 +359,6 @@ async function run() {
       }
     });
 
-    app.get("/surveys/user/:userId", async (req, res) => {
-      const userId = req.params.userId;
-      try {
-        const surveys = await surveyCollection
-          .find({ userId: userId })
-          .toArray();
-        res.status(200).send(surveys);
-      } catch (error) {
-        console.error("Error fetching surveys", error);
-        res
-          .status(500)
-          .send({ message: "Internal Server Error", error: error.message });
-      }
-    });
-
-    app.get("/surveys/:surveyId/responses", async (req, res) => {
-      const surveyId = req.params.surveyId;
-      try {
-        const responses = await responsesCollection
-          .find({ surveyId: surveyId })
-          .toArray();
-        res.status(200).send(responses);
-      } catch (error) {
-        console.error("Error fetching responses", error);
-        res
-          .status(500)
-          .send({ message: "Internal Server Error", error: error.message });
-      }
-    });
-
-    app.get(
-      "/allSurveys/responses",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const votes = await voteCollection.find().toArray();
-          if (votes.length === 0) {
-            return res.status(404).send("No votes found for this survey");
-          }
-          res.status(200).send(votes);
-        } catch (error) {
-          console.error("Error fetching votes:", error);
-          res.status(500).send("Error fetching votes");
-        }
-      }
-    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
